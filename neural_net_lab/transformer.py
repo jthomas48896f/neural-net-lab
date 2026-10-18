@@ -107,6 +107,61 @@ class RMSNorm(Layer):
         return [self.gamma]
 
 
+class RotaryPositionalEmbedding(Layer):
+    """
+    Rotary positional embedding (RoPE), rotate-half form.
+
+    No learned parameters: position is encoded by rotating each pair
+    of features. The last axis is split into halves x1 and x2, and for
+    position t and half-index i the pair is rotated by the angle
+    t * base ** (-2i / D):
+
+        y1 = x1 * cos(angle) - x2 * sin(angle)
+        y2 = x1 * sin(angle) + x2 * cos(angle)
+
+    Input shape is (..., T, D) with D even, so the same layer applies
+    to a sequence (B, T, D) or to per-head queries and keys
+    (B, H, T, D). Each rotation is orthogonal, so the backward pass
+    is the transpose rotation (the same form with the angle negated):
+
+        dx1 = dy1 * cos(angle) + dy2 * sin(angle)
+        dx2 = dy2 * cos(angle) - dy1 * sin(angle)
+    """
+
+    def __init__(self, dim, base=10000.0):
+        super().__init__()
+        if dim % 2 != 0:
+            raise ValueError("dim must be even for rotary embedding")
+        self.dim = dim
+        self.base = base
+
+    def forward(self, x):
+        if x.shape[-1] != self.dim:
+            raise ValueError("last axis of input must match dim")
+        T = x.shape[-2]
+        half = self.dim // 2
+        inv_freq = self.base ** (-np.arange(half) / half)
+        angles = np.arange(T)[:, None] * inv_freq[None, :]  # (T, half)
+        self._cos = np.cos(angles)
+        self._sin = np.sin(angles)
+        x1 = x[..., :half]
+        x2 = x[..., half:]
+        y1 = x1 * self._cos - x2 * self._sin
+        y2 = x1 * self._sin + x2 * self._cos
+        return np.concatenate([y1, y2], axis=-1)
+
+    def backward(self, grad_output):
+        half = self.dim // 2
+        dy1 = grad_output[..., :half]
+        dy2 = grad_output[..., half:]
+        dx1 = dy1 * self._cos + dy2 * self._sin
+        dx2 = dy2 * self._cos - dy1 * self._sin
+        return np.concatenate([dx1, dx2], axis=-1)
+
+    def parameters(self):
+        return []
+
+
 class MultiHeadSelfAttention(Layer):
     """
     Multi-head self attention with an optional causal mask.

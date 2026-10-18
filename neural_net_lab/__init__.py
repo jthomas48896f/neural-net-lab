@@ -14,7 +14,8 @@ from .losses import MSELoss, CrossEntropyLoss, BinaryCrossEntropyLoss, get_loss
 from .optimizers import SGD, Adam, RMSProp, AdaGrad, StepDecay, CosineAnnealing
 from .network import Network, TrainingHistory, PrintProgress, EarlyStopping
 from .transformer import (
-    LayerNorm, RMSNorm, MultiHeadSelfAttention, FeedForward,
+    LayerNorm, RMSNorm, RotaryPositionalEmbedding,
+    MultiHeadSelfAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, CharTransformerLM,
 )
 from .datasets import (
@@ -30,7 +31,8 @@ __all__ = [
     "MSELoss", "CrossEntropyLoss", "BinaryCrossEntropyLoss",
     "SGD", "Adam", "RMSProp", "AdaGrad", "StepDecay", "CosineAnnealing",
     "Network", "TrainingHistory", "PrintProgress", "EarlyStopping",
-    "LayerNorm", "RMSNorm", "MultiHeadSelfAttention", "FeedForward",
+    "LayerNorm", "RMSNorm", "RotaryPositionalEmbedding",
+    "MultiHeadSelfAttention", "FeedForward",
     "SwiGLUFeedForward", "TransformerBlock",
     "CharTransformerLM",
     "make_spirals", "make_moons", "make_circles", "make_xor",

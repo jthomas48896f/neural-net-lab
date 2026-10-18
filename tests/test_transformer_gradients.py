@@ -25,7 +25,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from neural_net_lab.transformer import (
-    LayerNorm, RMSNorm, MultiHeadSelfAttention, FeedForward,
+    LayerNorm, RMSNorm, RotaryPositionalEmbedding,
+    MultiHeadSelfAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock,
     CharTransformerLM,
 )
@@ -129,6 +130,21 @@ class TestSwiGLUFeedForwardGradients(unittest.TestCase):
         rng = np.random.default_rng(12)
         x = rng.standard_normal((2, 4, 4)) * 3.0 + 1.5
         check_layer(self, layer, x, seed=12)
+
+
+# Why: RoPE has no learned parameters and no other layer here encodes position by rotation, so its backward (the transpose rotation) needs its own finite-difference proof of the input gradient, on both sequence and per-head shapes.
+class TestRotaryPositionalEmbeddingGradients(unittest.TestCase):
+    def test_gradients(self):
+        rng = np.random.default_rng(13)
+        layer = RotaryPositionalEmbedding(8)
+        x = rng.standard_normal((2, 4, 8))
+        check_layer(self, layer, x, seed=13)
+
+    def test_gradients_scaled_head_shape(self):
+        rng = np.random.default_rng(14)
+        layer = RotaryPositionalEmbedding(8)
+        x = rng.standard_normal((2, 2, 3, 8)) * 3.0 + 1.5
+        check_layer(self, layer, x, seed=14)
 
 
 class TestAttentionGradients(unittest.TestCase):

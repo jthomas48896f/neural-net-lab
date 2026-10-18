@@ -19,7 +19,7 @@
 
 # Machine
 
-Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 20 tests, all green.
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 22 tests, all green.
 
 Layer 5 of Topsoil Commons: autonomy.
 
@@ -42,7 +42,9 @@ where the script measures the library against it.
 - **Transformer** (`neural_net_lab/transformer.py`): layer
   normalization, RMS normalization (RMSNorm, verified by the
   finite difference gradient checks in
-  `tests/test_transformer_gradients.py`), multi-head causal self
+  `tests/test_transformer_gradients.py`), rotary positional
+  embedding (RotaryPositionalEmbedding, RoPE, verified by the same
+  gradient checks), multi-head causal self
   attention, feed-forward
   blocks (including a SwiGLU gated variant, verified by the same
   gradient checks), pre-norm residual blocks, token and positional embeddings,
@@ -63,7 +65,7 @@ artifact, it is not claimed here.
 
 **Gradient checks** (`python -m unittest discover -s tests`, run
 2026-10-15, all passing): every transformer backward (layer norm,
-causal and non-causal attention, feed-forward, a full block, and the
+rotary positional embedding, causal and non-causal attention, feed-forward, a full block, and the
 complete language model) matches central finite differences to a
 relative tolerance of 1e-5, with an absolute floor for gradients
 that are identically zero by symmetry. The key bias gradient is the
@@ -191,7 +193,7 @@ python scripts/train_char_lm.py --data data/alice_in_wonderland.txt --corpus "Al
 neural_net_lab/
   tensor.py        - Custom tensor with autograd
   layers.py        - Dense, Dropout, BatchNorm, Parameter
-  transformer.py   - LayerNorm, RMSNorm, attention, blocks (incl. SwiGLU), char LM
+  transformer.py   - LayerNorm, RMSNorm, RoPE, attention, blocks (incl. SwiGLU), char LM
   activations.py   - Activation functions
   losses.py        - Loss functions
   optimizers.py    - Optimizers and LR schedulers
