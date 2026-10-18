@@ -21,5 +21,7 @@ State as of October 15, 2026. Every line carries its evidence; a line without ev
 - [x] First outside contribution merged October 16, 2026: pull request #3 by shyam1017, finite difference gradient checks for the Dense, BatchNorm, and Dropout layers (good first issue #1, now closed). Verified before merging by running the full suite on the PR branch: 16 tests, OK (7 baseline plus 9 new). Suite on main after the merge: 16 tests, OK. The original 7 of 7 transformer gradient checks in the line above are unchanged; the suite total is now 16.
 - [x] Scale step training run October 16, 2026: 628,932 parameters (d_model 128, 3 layers, 4 heads, context 128), validation loss 5.396 to 2.441 over 200 steps on the sonnets corpus, wall time 852 s, artifact results/char_lm_run_scale2.json. Steps were set to 200 rather than the baseline's 250 because profiling at this size projected a 250 step run at or over the roughly 20 minute wall time budget for the pass; the final validation loss is slightly above the baseline's 2.413, and the README says so.
 
+- [x] SwiGLU gated feed-forward added October 18, 2026: SwiGLUFeedForward in neural_net_lab/transformer.py (SiLU gate times an up projection, then a down projection), exported from the package, with finite difference gradient checks in tests/test_transformer_gradients.py (TestSwiGLUFeedForwardGradients: standard and scaled input). Suite 18 tests OK before, 20 tests OK after.
+
 ## Working agreements
 - AGENTS.md in this repo governs how changes are made and proven here.

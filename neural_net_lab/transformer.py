@@ -237,6 +237,57 @@ class FeedForward(Layer):
         return self.fc1.parameters() + self.fc2.parameters()
 
 
+class SwiGLUFeedForward(Layer):
+    """
+    Gated feed-forward network (SwiGLU): Linear -> SiLU gate times a
+    second Linear projection -> Linear.
+
+    h = SiLU(x @ W_gate + b_gate) * (x @ W_up + b_up)
+    y = h @ W_down + b_down
+
+    The gate makes the backward a product rule across two branches off
+    the same input, which is why this variant carries its own gradient
+    check rather than reusing the FeedForward one.
+    """
+
+    def __init__(self, d_model, d_ff=None, seed=None):
+        super().__init__()
+        d_ff = d_ff or 4 * d_model
+        rng = np.random.default_rng(seed)
+        # Dense uses the global RNG for init; reseed around construction
+        # so a model's parameters are reproducible from one seed.
+        state = np.random.get_state()
+        np.random.seed(rng.integers(0, 2 ** 31 - 1))
+        self.gate = Dense(d_model, d_ff, activation=None, weight_init="he")
+        self.up = Dense(d_model, d_ff, activation=None, weight_init="he")
+        self.down = Dense(d_ff, d_model, activation=None, weight_init="xavier")
+        np.random.set_state(state)
+
+    def forward(self, x):
+        shape = x.shape
+        x2 = x.reshape(-1, shape[-1])
+        self._gate_out = self.gate.forward(x2)
+        self._up_out = self.up.forward(x2)
+        self._sigmoid = 1.0 / (1.0 + np.exp(-self._gate_out))
+        h = self._gate_out * self._sigmoid * self._up_out
+        out = self.down.forward(h)
+        return out.reshape(shape)
+
+    def backward(self, grad_output):
+        shape = grad_output.shape
+        dh = self.down.backward(grad_output.reshape(-1, shape[-1]))
+        # Product rule: h = silu(g) * u, silu'(g) = s * (1 + g * (1 - s))
+        d_up = dh * (self._gate_out * self._sigmoid)
+        d_gate = dh * self._up_out * self._sigmoid * (
+            1.0 + self._gate_out * (1.0 - self._sigmoid))
+        grad = self.up.backward(d_up) + self.gate.backward(d_gate)
+        return grad.reshape(shape)
+
+    def parameters(self):
+        return (self.gate.parameters() + self.up.parameters()
+                + self.down.parameters())
+
+
 class TransformerBlock(Layer):
     """
     Pre-norm transformer block.

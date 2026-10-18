@@ -19,7 +19,7 @@
 
 # Machine
 
-Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 18 tests, all green.
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 20 tests, all green.
 
 Layer 5 of Topsoil Commons: autonomy.
 
@@ -44,7 +44,8 @@ where the script measures the library against it.
   finite difference gradient checks in
   `tests/test_transformer_gradients.py`), multi-head causal self
   attention, feed-forward
-  blocks, pre-norm residual blocks, token and positional embeddings,
+  blocks (including a SwiGLU gated variant, verified by the same
+  gradient checks), pre-norm residual blocks, token and positional embeddings,
   and a character level language model. Every backward pass is hand
   derived in the same explicit style as the original layers.
 - **Activations**: ReLU, LeakyReLU, Sigmoid, Tanh, Softmax, GELU
@@ -190,7 +191,7 @@ python scripts/train_char_lm.py --data data/alice_in_wonderland.txt --corpus "Al
 neural_net_lab/
   tensor.py        - Custom tensor with autograd
   layers.py        - Dense, Dropout, BatchNorm, Parameter
-  transformer.py   - LayerNorm, RMSNorm, attention, blocks, char LM
+  transformer.py   - LayerNorm, RMSNorm, attention, blocks (incl. SwiGLU), char LM
   activations.py   - Activation functions
   losses.py        - Loss functions
   optimizers.py    - Optimizers and LR schedulers

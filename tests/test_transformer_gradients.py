@@ -25,7 +25,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from neural_net_lab.transformer import (
-    LayerNorm, RMSNorm, MultiHeadSelfAttention, FeedForward, TransformerBlock,
+    LayerNorm, RMSNorm, MultiHeadSelfAttention, FeedForward,
+    SwiGLUFeedForward, TransformerBlock,
     CharTransformerLM,
 )
 from neural_net_lab.losses import CrossEntropyLoss
@@ -113,6 +114,21 @@ class TestRMSNormGradients(unittest.TestCase):
         layer.gamma.data = rng.standard_normal(4)
         x = rng.standard_normal((2, 4, 4)) * 3.0 + 1.5
         check_layer(self, layer, x, seed=9)
+
+
+# Why: SwiGLU's backward is a product rule across two branches off the same input (the SiLU gate and the up projection), a derivation no other layer here exercises, so it needs its own finite-difference proof.
+class TestSwiGLUFeedForwardGradients(unittest.TestCase):
+    def test_gradients(self):
+        layer = SwiGLUFeedForward(6, d_ff=12, seed=11)
+        rng = np.random.default_rng(11)
+        x = rng.standard_normal((2, 3, 6))
+        check_layer(self, layer, x, seed=11)
+
+    def test_gradients_scaled_input(self):
+        layer = SwiGLUFeedForward(4, d_ff=8, seed=12)
+        rng = np.random.default_rng(12)
+        x = rng.standard_normal((2, 4, 4)) * 3.0 + 1.5
+        check_layer(self, layer, x, seed=12)
 
 
 class TestAttentionGradients(unittest.TestCase):
