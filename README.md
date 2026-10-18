@@ -19,10 +19,13 @@
 
 # Machine
 
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 18 tests, all green.
+
+Layer 5 of Topsoil Commons: autonomy.
+
 First step: read the sonnets result in The proof below, where a 358,052 parameter transformer brought validation loss from 5.297 to 2.413 in 250 steps, then run the gradient test: python -m unittest discover -s tests.
 
-Machine serves autonomy, Layer 5. Here you learn how a neural
-network works by building one from scratch in NumPy. You get code
+Here you learn how a neural network works by building one from scratch in NumPy. You get code
 you can read, run, and change. The library has a custom Tensor that
 works out gradients, layers, and tools that update the model during
 training. It also has a decoder-only transformer. Tests check its

@@ -66,3 +66,11 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 Keep them small and single purpose. State the evidence in the PR
 description: what you ran and what it showed. Contributors are
 named in release notes.
+
+## Ways in, by level
+
+**First hour.** Run the suite: python -m unittest discover -s tests. It stands at 18 tests, all green. Then run the PyTorch benchmark (scripts/benchmark_pytorch.py) on your machine and file the result: the published table is one machine, and more machines make it a measurement instead of an anecdote.
+
+**First week.** Add a gradient check for one optimizer step (SGD with momentum, or Adam) on a small problem where the correct step is known, in the style of the existing gradient tests. It stands open, labeled good first issue. The transformer and layer checks at a tolerance of 1e-5 are the pattern to match.
+
+**The deep end.** The from scratch library runs about 4.13 times slower per step than PyTorch at identical size. Closing that gap in pure Python, while the gradient checks and the full suite stay green, is this project's hardest honest problem. The benchmark script is the judge.
