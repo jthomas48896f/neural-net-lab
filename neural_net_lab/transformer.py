@@ -510,6 +510,46 @@ class TransformerBlock(Layer):
                 + self.ln2.parameters() + self.ffn.parameters())
 
 
+class Embedding(Layer):
+    """
+    Token embedding lookup: a weight table whose rows are gathered by
+    integer indices.
+
+        forward:  out[...] = W[idx[...]]        (idx any integer shape)
+        backward: dW[i] = sum of grad_output over every position
+                  whose index is i
+
+    The backward is a scatter-add, not a gather: a row used at three
+    positions receives the sum of the three upstream gradients, and a
+    row no position uses receives exactly zero. The character language
+    model below has always computed this gradient inline with
+    np.add.at; this layer gives the same derivation a standalone,
+    gradient checked form, so the lookup the whole stack stands on is
+    verified on its own. Indices are discrete, so there is no input
+    gradient: backward returns None.
+    """
+
+    def __init__(self, num_embeddings, embedding_dim, seed=None):
+        super().__init__()
+        rng = np.random.default_rng(seed)
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.weight = Parameter(
+            rng.standard_normal((num_embeddings, embedding_dim))
+            * np.sqrt(2.0 / embedding_dim))
+
+    def forward(self, idx):
+        self._idx = np.asarray(idx)
+        return self.weight.data[self._idx]
+
+    def backward(self, grad_output):
+        np.add.at(self.weight.grad, self._idx, grad_output)
+        return None
+
+    def parameters(self):
+        return [self.weight]
+
+
 class CharTransformerLM:
     """
     A small decoder-only character level language model.

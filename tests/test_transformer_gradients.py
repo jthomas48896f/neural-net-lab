@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
     MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
-    SwiGLUFeedForward, TransformerBlock,
+    SwiGLUFeedForward, TransformerBlock, Embedding,
     CharTransformerLM,
 )
 from neural_net_lab.losses import CrossEntropyLoss
@@ -174,6 +174,42 @@ class TestGroupedQueryAttentionGradients(unittest.TestCase):
         layer = GroupedQueryAttention(8, 4, num_kv_heads=1, causal=False, seed=16)
         x = rng.standard_normal((2, 3, 8))
         check_layer(self, layer, x, seed=16)
+
+
+# Why: the embedding lookup's backward is a scatter-add (a repeated index
+# accumulates every position's gradient; an unused row gets exactly zero).
+# The language model computes it inline, but the standalone layer had no
+# check of its own; a backward that overwrote instead of accumulated would
+# pass any test that never repeats an index, so both cases are pinned here.
+class TestEmbeddingGradients(unittest.TestCase):
+    def check_embedding(self, layer, idx, seed):
+        rng = np.random.default_rng(seed)
+        out = layer.forward(idx)
+        G = rng.standard_normal(out.shape)
+
+        def scalar_fn():
+            return float(np.sum(layer.forward(idx) * G))
+
+        layer.weight.zero_grad()
+        result = layer.backward(G)
+        self.assertIsNone(result, "indices are discrete: no input gradient")
+        analytic = layer.weight.grad.copy()
+        numeric = numeric_grad(scalar_fn, layer.weight.data)
+        assert_grad_close(self, analytic, numeric, "embedding weight")
+        return analytic
+
+    def test_repeated_indices_gradients(self):
+        layer = Embedding(7, 5, seed=21)
+        # Row 3 appears three times, row 0 twice; rows 1 and 5 never appear.
+        idx = np.array([[3, 0, 3], [6, 3, 0]])
+        analytic = self.check_embedding(layer, idx, seed=21)
+        self.assertTrue(np.all(analytic[1] == 0), "unused row 1 gradient is exactly zero")
+        self.assertTrue(np.all(analytic[5] == 0), "unused row 5 gradient is exactly zero")
+
+    def test_single_position_gradients(self):
+        layer = Embedding(6, 4, seed=22)
+        idx = np.array([[2], [4]])
+        self.check_embedding(layer, idx, seed=22)
 
 
 class TestFeedForwardGradients(unittest.TestCase):

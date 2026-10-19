@@ -19,7 +19,7 @@
 
 # Machine
 
-Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 24 tests, all green.
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 26 tests, all green.
 
 Layer 5 of Topsoil Commons: autonomy.
 
