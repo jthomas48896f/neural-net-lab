@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
-    MultiHeadSelfAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock,
     CharTransformerLM,
 )
@@ -159,6 +159,21 @@ class TestAttentionGradients(unittest.TestCase):
         layer = MultiHeadSelfAttention(8, 4, causal=False, seed=3)
         x = rng.standard_normal((2, 3, 8))
         check_layer(self, layer, x, seed=3)
+
+
+# Why: grouped-query attention shares each key/value head across a group of query heads, so its backward adds a group reduction (summing each expanded key/value gradient over its group) that no other attention here exercises; the second test covers the single key/value head limit (multi-query attention), where every query head shares one head.
+class TestGroupedQueryAttentionGradients(unittest.TestCase):
+    def test_causal_gradients(self):
+        rng = np.random.default_rng(15)
+        layer = GroupedQueryAttention(8, 4, num_kv_heads=2, causal=True, seed=15)
+        x = rng.standard_normal((2, 4, 8))
+        check_layer(self, layer, x, seed=15)
+
+    def test_noncausal_single_kv_head_gradients(self):
+        rng = np.random.default_rng(16)
+        layer = GroupedQueryAttention(8, 4, num_kv_heads=1, causal=False, seed=16)
+        x = rng.standard_normal((2, 3, 8))
+        check_layer(self, layer, x, seed=16)
 
 
 class TestFeedForwardGradients(unittest.TestCase):

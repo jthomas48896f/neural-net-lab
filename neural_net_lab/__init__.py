@@ -15,7 +15,7 @@ from .optimizers import SGD, Adam, RMSProp, AdaGrad, StepDecay, CosineAnnealing
 from .network import Network, TrainingHistory, PrintProgress, EarlyStopping
 from .transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
-    MultiHeadSelfAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, CharTransformerLM,
 )
 from .datasets import (
@@ -32,7 +32,7 @@ __all__ = [
     "SGD", "Adam", "RMSProp", "AdaGrad", "StepDecay", "CosineAnnealing",
     "Network", "TrainingHistory", "PrintProgress", "EarlyStopping",
     "LayerNorm", "RMSNorm", "RotaryPositionalEmbedding",
-    "MultiHeadSelfAttention", "FeedForward",
+    "MultiHeadSelfAttention", "GroupedQueryAttention", "FeedForward",
     "SwiGLUFeedForward", "TransformerBlock",
     "CharTransformerLM",
     "make_spirals", "make_moons", "make_circles", "make_xor",

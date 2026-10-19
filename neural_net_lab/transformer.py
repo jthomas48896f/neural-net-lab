@@ -261,6 +261,141 @@ class MultiHeadSelfAttention(Layer):
                 self.b_q, self.b_k, self.b_v, self.b_o]
 
 
+class GroupedQueryAttention(Layer):
+    """
+    Grouped-query attention (GQA) with an optional causal mask.
+
+    Input shape: (B, T, D). Queries use num_heads heads, while keys
+    and values use only num_kv_heads heads: each key/value head is
+    shared by a group of group_size = num_heads // num_kv_heads
+    consecutive query heads. With num_kv_heads == num_heads this is
+    multi-head attention; with num_kv_heads == 1 it is multi-query
+    attention. The key and value projections are therefore smaller
+    (d_model x kv_dim, kv_dim = num_kv_heads * head_dim), which is
+    the point of the design: fewer key/value parameters and a smaller
+    key/value cache at inference time, at the same query width.
+
+    The backward pass is the multi-head derivation with one extra
+    step no other layer here exercises: a shared key/value head
+    receives gradient from every query head in its group, so the
+    expanded key/value gradients are reshaped to expose the group
+    axis and summed over it before the key/value projections.
+    """
+
+    def __init__(self, d_model, num_heads, num_kv_heads, causal=True,
+                 seed=None):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        if num_heads % num_kv_heads != 0:
+            raise ValueError(
+                "num_heads must be divisible by num_kv_heads")
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = d_model // num_heads
+        self.kv_dim = num_kv_heads * self.head_dim
+        self.group_size = num_heads // num_kv_heads
+        self.causal = causal
+
+        rng = np.random.default_rng(seed)
+        scale = np.sqrt(2.0 / d_model)
+        self.W_q = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_k = Parameter(rng.standard_normal((d_model, self.kv_dim)) * scale)
+        self.W_v = Parameter(rng.standard_normal((d_model, self.kv_dim)) * scale)
+        self.W_o = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.b_q = Parameter(np.zeros(d_model))
+        self.b_k = Parameter(np.zeros(self.kv_dim))
+        self.b_v = Parameter(np.zeros(self.kv_dim))
+        self.b_o = Parameter(np.zeros(d_model))
+        self._softmax = Softmax()
+
+    def _split_heads(self, x, num_heads):
+        B, T, _ = x.shape
+        return x.reshape(B, T, num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def _merge_heads(self, x):
+        B, _, T, _ = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, T, self.d_model)
+
+    def _merge_kv_heads(self, x):
+        B, _, T, _ = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, T, self.kv_dim)
+
+    def _expand_kv(self, x):
+        # (B, Hkv, T, Dh) -> (B, Hq, T, Dh): repeat each key/value
+        # head for the query heads in its group, in consecutive order.
+        return np.repeat(x, self.group_size, axis=1)
+
+    def _reduce_kv(self, x):
+        # Backward of _expand_kv: sum the gradient of each expanded
+        # head back into the shared head it came from.
+        B, _, T, _ = x.shape
+        grouped = x.reshape(B, self.num_kv_heads, self.group_size, T,
+                            self.head_dim)
+        return grouped.sum(axis=2)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        self._x = x
+        q = x @ self.W_q.data + self.b_q.data
+        k = x @ self.W_k.data + self.b_k.data
+        v = x @ self.W_v.data + self.b_v.data
+        self._q = self._split_heads(q, self.num_heads)
+        self._k = self._expand_kv(self._split_heads(k, self.num_kv_heads))
+        self._v = self._expand_kv(self._split_heads(v, self.num_kv_heads))
+
+        scores = self._q @ self._k.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)
+        if self.causal:
+            mask = np.triu(np.ones((T, T), dtype=bool), k=1)
+            scores = np.where(mask, -1e9, scores)
+        self._attn = self._softmax.forward(scores)
+        context = self._attn @ self._v            # (B, Hq, T, Dh)
+        merged = self._merge_heads(context)        # (B, T, D)
+        self._merged = merged
+        return merged @ self.W_o.data + self.b_o.data
+
+    def backward(self, grad_output):
+        B, T, D = grad_output.shape
+        # Output projection
+        self.W_o.grad += self._merged.reshape(-1, D).T @ grad_output.reshape(-1, D)
+        self.b_o.grad += grad_output.sum(axis=(0, 1))
+        d_merged = grad_output @ self.W_o.data.T
+        d_context = d_merged.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        # context = attn @ v_expanded
+        d_attn = d_context @ self._v.transpose(0, 1, 3, 2)
+        d_v_expanded = self._attn.transpose(0, 1, 3, 2) @ d_context
+
+        # Softmax backward (masked positions have attn ~ 0, so their
+        # score gradients come out ~ 0 as well)
+        d_scores = self._softmax.backward(d_attn) / np.sqrt(self.head_dim)
+
+        # scores = q @ k_expanded^T / sqrt(Dh)
+        d_q = d_scores @ self._k
+        d_k_expanded = d_scores.transpose(0, 1, 3, 2) @ self._q
+
+        # Sum each expanded gradient over its group: a shared head's
+        # gradient is the sum of its query heads' gradients.
+        dq = self._merge_heads(d_q)
+        dk = self._merge_kv_heads(self._reduce_kv(d_k_expanded))
+        dv = self._merge_kv_heads(self._reduce_kv(d_v_expanded))
+
+        x2 = self._x.reshape(-1, D)
+        self.W_q.grad += x2.T @ dq.reshape(-1, D)
+        self.b_q.grad += dq.sum(axis=(0, 1))
+        self.W_k.grad += x2.T @ dk.reshape(-1, self.kv_dim)
+        self.b_k.grad += dk.sum(axis=(0, 1))
+        self.W_v.grad += x2.T @ dv.reshape(-1, self.kv_dim)
+        self.b_v.grad += dv.sum(axis=(0, 1))
+
+        return dq @ self.W_q.data.T + dk @ self.W_k.data.T + dv @ self.W_v.data.T
+
+    def parameters(self):
+        return [self.W_q, self.W_k, self.W_v, self.W_o,
+                self.b_q, self.b_k, self.b_v, self.b_o]
+
+
 class FeedForward(Layer):
     """Position wise feed-forward network: Linear -> GELU -> Linear."""
 
