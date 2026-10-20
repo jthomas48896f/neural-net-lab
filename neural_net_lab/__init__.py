@@ -16,7 +16,7 @@ from .network import Network, TrainingHistory, PrintProgress, EarlyStopping
 from .transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, CrossAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, Embedding, CharTransformerLM,
 )
 from .datasets import (
@@ -34,7 +34,7 @@ __all__ = [
     "Network", "TrainingHistory", "PrintProgress", "EarlyStopping",
     "LayerNorm", "RMSNorm", "RotaryPositionalEmbedding",
     "SinusoidalPositionalEmbedding",
-    "MultiHeadSelfAttention", "GroupedQueryAttention", "FeedForward",
+    "MultiHeadSelfAttention", "GroupedQueryAttention", "CrossAttention", "FeedForward",
     "SwiGLUFeedForward", "TransformerBlock", "Embedding",
     "CharTransformerLM",
     "make_spirals", "make_moons", "make_circles", "make_xor",

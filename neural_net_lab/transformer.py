@@ -448,6 +448,125 @@ class GroupedQueryAttention(Layer):
                 self.b_q, self.b_k, self.b_v, self.b_o]
 
 
+class CrossAttention(Layer):
+    """
+    Multi-head cross attention: queries from one sequence, keys and
+    values from another (the encoder-decoder attention).
+
+    This is the one attention here with a two-input API, unlike every
+    other Layer in this file:
+
+        forward(x_q, x_kv)   x_q: (B, Tq, D), x_kv: (B, Tk, D)
+        backward(grad)  ->   (grad_x_q, grad_x_kv)
+
+    The query sequence length Tq may differ from the key/value length
+    Tk; both sequences share d_model, so all four projections are
+    d_model x d_model as in self attention. There is no causal mask:
+    every query position may attend to every key/value position,
+    which is what makes the block usable for a decoder attending to
+    a finished encoder output.
+
+    The backward pass is the multi-head derivation split across the
+    two inputs: the query input receives gradient only through the
+    query projection, while the key/value input receives the sum of
+    the gradients through the key and value projections. The key
+    bias gradient is exactly zero for the same reason as in self
+    attention: adding a constant to every key shifts each score row
+    by a constant and softmax is invariant to that.
+    """
+
+    def __init__(self, d_model, num_heads, seed=None):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+
+        rng = np.random.default_rng(seed)
+        scale = np.sqrt(2.0 / d_model)
+        self.W_q = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_k = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_v = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_o = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.b_q = Parameter(np.zeros(d_model))
+        self.b_k = Parameter(np.zeros(d_model))
+        self.b_v = Parameter(np.zeros(d_model))
+        self.b_o = Parameter(np.zeros(d_model))
+        self._softmax = Softmax()
+
+    def _split_heads(self, x):
+        B, T, _ = x.shape
+        return x.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def _merge_heads(self, x, seq_len):
+        B = x.shape[0]
+        return x.transpose(0, 2, 1, 3).reshape(B, seq_len, self.d_model)
+
+    def forward(self, x_q, x_kv):
+        B, Tq, D = x_q.shape
+        Tk = x_kv.shape[1]
+        self._x_q = x_q
+        self._x_kv = x_kv
+        self._tq = Tq
+        self._tk = Tk
+        q = x_q @ self.W_q.data + self.b_q.data
+        k = x_kv @ self.W_k.data + self.b_k.data
+        v = x_kv @ self.W_v.data + self.b_v.data
+        self._q = self._split_heads(q)
+        self._k = self._split_heads(k)
+        self._v = self._split_heads(v)
+
+        scores = self._q @ self._k.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)
+        self._attn = self._softmax.forward(scores)
+        context = self._attn @ self._v            # (B, H, Tq, Dh)
+        merged = self._merge_heads(context, Tq)    # (B, Tq, D)
+        self._merged = merged
+        return merged @ self.W_o.data + self.b_o.data
+
+    def backward(self, grad_output):
+        B, Tq, D = grad_output.shape
+        # Output projection
+        self.W_o.grad += self._merged.reshape(-1, D).T @ grad_output.reshape(-1, D)
+        self.b_o.grad += grad_output.sum(axis=(0, 1))
+        d_merged = grad_output @ self.W_o.data.T
+        d_context = d_merged.reshape(B, Tq, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        # context = attn @ v
+        d_attn = d_context @ self._v.transpose(0, 1, 3, 2)
+        d_v = self._attn.transpose(0, 1, 3, 2) @ d_context
+
+        # Softmax backward (no mask, so no masked positions here)
+        d_scores = self._softmax.backward(d_attn) / np.sqrt(self.head_dim)
+
+        # scores = q @ k^T / sqrt(Dh)
+        d_q = d_scores @ self._k
+        d_k = d_scores.transpose(0, 1, 3, 2) @ self._q
+
+        dq = self._merge_heads(d_q, self._tq)
+        dk = self._merge_heads(d_k, self._tk)
+        dv = self._merge_heads(d_v, self._tk)
+
+        x_q2 = self._x_q.reshape(-1, D)
+        x_kv2 = self._x_kv.reshape(-1, D)
+        self.W_q.grad += x_q2.T @ dq.reshape(-1, D)
+        self.b_q.grad += dq.sum(axis=(0, 1))
+        self.W_k.grad += x_kv2.T @ dk.reshape(-1, D)
+        self.b_k.grad += dk.sum(axis=(0, 1))
+        self.W_v.grad += x_kv2.T @ dv.reshape(-1, D)
+        self.b_v.grad += dv.sum(axis=(0, 1))
+
+        # Two inputs, two gradients: x_q only through the query
+        # projection, x_kv through the key and value projections.
+        grad_x_q = dq @ self.W_q.data.T
+        grad_x_kv = dk @ self.W_k.data.T + dv @ self.W_v.data.T
+        return grad_x_q, grad_x_kv
+
+    def parameters(self):
+        return [self.W_q, self.W_k, self.W_v, self.W_o,
+                self.b_q, self.b_k, self.b_v, self.b_o]
+
+
 class FeedForward(Layer):
     """Position wise feed-forward network: Linear -> GELU -> Linear."""
 

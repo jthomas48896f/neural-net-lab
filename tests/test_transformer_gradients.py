@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, CrossAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, Embedding,
     CharTransformerLM,
 )
@@ -217,6 +217,44 @@ class TestGroupedQueryAttentionGradients(unittest.TestCase):
         layer = GroupedQueryAttention(8, 4, num_kv_heads=1, causal=False, seed=16)
         x = rng.standard_normal((2, 3, 8))
         check_layer(self, layer, x, seed=16)
+
+
+# Why: cross attention is the one attention here with a two-input API: queries come from one sequence and keys/values from another, the two sequences may differ in length, and backward must return two input gradients (the query input only through the query projection, the key/value input through the key and value projections summed). No single-input check_layer call can prove that split, so this class checks both inputs and all parameters with its own two-input harness, following the same tolerances.
+class TestCrossAttentionGradients(unittest.TestCase):
+    def check_cross_attention(self, layer, x_q, x_kv, seed):
+        rng = np.random.default_rng(seed)
+        out = layer.forward(x_q, x_kv)
+        G = rng.standard_normal(out.shape)
+
+        def scalar_fn():
+            return float(np.sum(layer.forward(x_q, x_kv) * G))
+
+        for p in layer.parameters():
+            p.zero_grad()
+        analytic_q, analytic_kv = layer.backward(G)
+        assert_grad_close(self, analytic_q, numeric_grad(scalar_fn, x_q), "query input")
+        assert_grad_close(self, analytic_kv, numeric_grad(scalar_fn, x_kv), "key/value input")
+
+        for i, p in enumerate(layer.parameters()):
+            analytic = p.grad.copy()
+            numeric = numeric_grad(scalar_fn, p.data)
+            assert_grad_close(self, analytic, numeric, f"param[{i}] shape {p.data.shape}")
+
+    # Why: proves both input gradients and all parameter gradients when the query sequence is shorter than the key/value sequence, the encoder-decoder shape self attention never has.
+    def test_gradients_different_lengths(self):
+        rng = np.random.default_rng(25)
+        layer = CrossAttention(8, 2, seed=25)
+        x_q = rng.standard_normal((2, 3, 8))
+        x_kv = rng.standard_normal((2, 4, 8))
+        self.check_cross_attention(layer, x_q, x_kv, seed=25)
+
+    # Why: proves the same two-input split holds for scaled and shifted inputs at a different head count, where a shape- or scale-dependent error in either branch would show.
+    def test_gradients_scaled_inputs(self):
+        rng = np.random.default_rng(26)
+        layer = CrossAttention(8, 4, seed=26)
+        x_q = rng.standard_normal((2, 2, 8)) * 3.0 + 1.5
+        x_kv = rng.standard_normal((2, 3, 8)) * 3.0 - 1.0
+        self.check_cross_attention(layer, x_q, x_kv, seed=26)
 
 
 # Why: the embedding lookup's backward is a scatter-add (a repeated index
