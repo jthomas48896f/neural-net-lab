@@ -162,6 +162,58 @@ class RotaryPositionalEmbedding(Layer):
         return []
 
 
+class SinusoidalPositionalEmbedding(Layer):
+    """
+    Fixed sinusoidal positional embedding (the original transformer
+    encoding), with no learned parameters.
+
+    The encoding for position t and feature j is
+
+        PE(t, 2i)     = sin(t * base ** (-2i / D))
+        PE(t, 2i + 1) = cos(t * base ** (-2i / D))
+
+    precomputed at construction for positions up to max_len and
+    added to the input. Input shape is (..., T, D), so the same
+    layer applies to a sequence (B, T, D) or any leading shape the
+    other positional code uses; the (T, D) encoding broadcasts over
+    the leading axes. If a sequence is longer than max_len, the
+    table is extended by the same formula. Because the encoding is
+    a constant, the backward pass is the identity: the input
+    gradient is the upstream gradient unchanged.
+    """
+
+    def __init__(self, dim, max_len=512, base=10000.0):
+        super().__init__()
+        self.dim = dim
+        self.max_len = max_len
+        self.base = base
+        self.encoding = self._build(max_len)
+
+    def _build(self, length):
+        encoding = np.zeros((length, self.dim))
+        positions = np.arange(length)[:, None]
+        div_term = self.base ** (
+            -np.arange(0, self.dim, 2) / self.dim)
+        angles = positions * div_term[None, :]
+        encoding[:, 0::2] = np.sin(angles)
+        encoding[:, 1::2] = np.cos(angles[:, :self.dim // 2])
+        return encoding
+
+    def forward(self, x):
+        if x.shape[-1] != self.dim:
+            raise ValueError("last axis of input must match dim")
+        T = x.shape[-2]
+        if T > self.encoding.shape[0]:
+            self.encoding = self._build(T)
+        return x + self.encoding[:T]
+
+    def backward(self, grad_output):
+        return grad_output
+
+    def parameters(self):
+        return []
+
+
 class MultiHeadSelfAttention(Layer):
     """
     Multi-head self attention with an optional causal mask.

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
+    SinusoidalPositionalEmbedding,
     MultiHeadSelfAttention, GroupedQueryAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, Embedding,
     CharTransformerLM,
@@ -145,6 +146,48 @@ class TestRotaryPositionalEmbeddingGradients(unittest.TestCase):
         layer = RotaryPositionalEmbedding(8)
         x = rng.standard_normal((2, 2, 3, 8)) * 3.0 + 1.5
         check_layer(self, layer, x, seed=14)
+
+
+# Why: the sinusoidal encoding is a fixed constant with no learned parameters, so its backward is the identity, a claim no learned or rotated positional layer here makes; it needs its own finite-difference proof, plus a direct check of the sin/cos values it adds.
+class TestSinusoidalPositionalEmbeddingGradients(unittest.TestCase):
+    # Why: proves the identity input gradient against finite differences on a plain sequence shape.
+    def test_gradients(self):
+        rng = np.random.default_rng(23)
+        layer = SinusoidalPositionalEmbedding(8)
+        x = rng.standard_normal((2, 4, 8))
+        check_layer(self, layer, x, seed=23)
+
+    # Why: proves the same identity gradient holds for a scaled input at a different dimension, where a shape- or scale-dependent error would show.
+    def test_gradients_scaled_different_dimension(self):
+        rng = np.random.default_rng(24)
+        layer = SinusoidalPositionalEmbedding(4)
+        x = rng.standard_normal((2, 4, 4)) * 3.0 + 1.5
+        check_layer(self, layer, x, seed=24)
+
+    # Why: pins the added values themselves to the sin/cos formula, since a wrong encoding with an identity backward would still pass the gradient checks above.
+    def test_encoding_matches_formula(self):
+        dim = 8
+        layer = SinusoidalPositionalEmbedding(dim)
+        out = layer.forward(np.zeros((1, 4, dim)))
+        # Position 0: sin(0) = 0 on even features, cos(0) = 1 on odd.
+        self.assertTrue(np.allclose(out[0, 0], [0.0, 1.0] * (dim // 2)))
+        # A later position, recomputed feature by feature from the formula.
+        pos = 3
+        expected = np.array([
+            np.sin(pos * 10000.0 ** (-2 * (j // 2) / dim)) if j % 2 == 0
+            else np.cos(pos * 10000.0 ** (-2 * (j // 2) / dim))
+            for j in range(dim)
+        ])
+        self.assertTrue(np.allclose(out[0, pos], expected))
+
+    # Why: proves position actually enters the output, so identical tokens at different positions do not stay identical.
+    def test_identical_tokens_differ_by_position(self):
+        layer = SinusoidalPositionalEmbedding(8)
+        token = np.arange(8, dtype=float)
+        x = np.tile(token, (1, 4, 1))
+        out = layer.forward(x)
+        self.assertFalse(np.allclose(out[0, 0], out[0, 1]))
+        self.assertFalse(np.allclose(out[0, 0], out[0, 3]))
 
 
 class TestAttentionGradients(unittest.TestCase):

@@ -19,7 +19,7 @@
 
 # Machine
 
-Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 26 tests, all green.
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 30 tests, all green.
 
 Layer 5 of Topsoil Commons: autonomy.
 
@@ -44,7 +44,9 @@ where the script measures the library against it.
   finite difference gradient checks in
   `tests/test_transformer_gradients.py`), rotary positional
   embedding (RotaryPositionalEmbedding, RoPE, verified by the same
-  gradient checks), multi-head causal self
+  gradient checks), fixed sinusoidal positional
+  embedding (SinusoidalPositionalEmbedding, no learned parameters,
+  verified by the same gradient checks), multi-head causal self
   attention, grouped-query attention (GroupedQueryAttention,
   verified by the same gradient checks), feed-forward
   blocks (including a SwiGLU gated variant, verified by the same
@@ -66,7 +68,7 @@ artifact, it is not claimed here.
 
 **Gradient checks** (`python -m unittest discover -s tests`, run
 2026-10-15, all passing): every transformer backward (layer norm,
-rotary positional embedding, causal and non-causal attention,
+rotary positional embedding, sinusoidal positional embedding, causal and non-causal attention,
 grouped-query attention (grouped and single key/value head),
 feed-forward, a full block, and the
 complete language model) matches central finite differences to a
@@ -196,7 +198,7 @@ python scripts/train_char_lm.py --data data/alice_in_wonderland.txt --corpus "Al
 neural_net_lab/
   tensor.py        - Custom tensor with autograd
   layers.py        - Dense, Dropout, BatchNorm, Parameter
-  transformer.py   - LayerNorm, RMSNorm, RoPE, attention (incl. GQA), blocks (incl. SwiGLU), char LM
+  transformer.py   - LayerNorm, RMSNorm, RoPE, sinusoidal, attention (incl. GQA), blocks (incl. SwiGLU), char LM
   activations.py   - Activation functions
   losses.py        - Loss functions
   optimizers.py    - Optimizers and LR schedulers
