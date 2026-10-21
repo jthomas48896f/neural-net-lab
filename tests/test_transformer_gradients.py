@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    MultiHeadSelfAttention, GroupedQueryAttention, CrossAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, MultiQueryAttention, CrossAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, Embedding,
     CharTransformerLM,
 )
@@ -217,6 +217,21 @@ class TestGroupedQueryAttentionGradients(unittest.TestCase):
         layer = GroupedQueryAttention(8, 4, num_kv_heads=1, causal=False, seed=16)
         x = rng.standard_normal((2, 3, 8))
         check_layer(self, layer, x, seed=16)
+
+
+# Why: multi-query attention is the standalone single key/value head form: every query head shares one key/value head, so its backward sums the expanded key/value gradients over all query heads, and its key/value projections are sized to a single head; grouped-query attention reaches this only as a limit of its general group machinery, so the standalone block needs its own finite-difference proof.
+class TestMultiQueryAttentionGradients(unittest.TestCase):
+    def test_causal_gradients(self):
+        rng = np.random.default_rng(27)
+        layer = MultiQueryAttention(8, 4, causal=True, seed=27)
+        x = rng.standard_normal((2, 4, 8))
+        check_layer(self, layer, x, seed=27)
+
+    def test_noncausal_gradients_scaled_input(self):
+        rng = np.random.default_rng(28)
+        layer = MultiQueryAttention(8, 2, causal=False, seed=28)
+        x = rng.standard_normal((2, 3, 8)) * 3.0 + 1.5
+        check_layer(self, layer, x, seed=28)
 
 
 # Why: cross attention is the one attention here with a two-input API: queries come from one sequence and keys/values from another, the two sequences may differ in length, and backward must return two input gradients (the query input only through the query projection, the key/value input through the key and value projections summed). No single-input check_layer call can prove that split, so this class checks both inputs and all parameters with its own two-input harness, following the same tolerances.

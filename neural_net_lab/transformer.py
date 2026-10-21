@@ -448,6 +448,128 @@ class GroupedQueryAttention(Layer):
                 self.b_q, self.b_k, self.b_v, self.b_o]
 
 
+class MultiQueryAttention(Layer):
+    """
+    Multi-query attention (MQA) with an optional causal mask.
+
+    Input shape: (B, T, D). Queries use num_heads heads, while keys
+    and values use a single head shared by every query head. The key
+    and value projections are therefore the smallest possible
+    (d_model x head_dim, head_dim = d_model // num_heads), which is
+    the point of the design: one key/value head to cache at inference
+    time, at the same query width as multi-head attention.
+
+    GroupedQueryAttention reaches the same limit when its
+    num_kv_heads is 1, but it keeps the general group machinery;
+    this block is the standalone single-head form, with its own
+    projections sized to one head and its own backward. That
+    backward is the multi-head derivation with one reduction no
+    other standalone layer here exercises in this form: the shared
+    key/value head receives gradient from every query head, so the
+    expanded key/value gradients are summed over all query heads
+    before the key/value projections.
+    """
+
+    def __init__(self, d_model, num_heads, causal=True, seed=None):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        self.causal = causal
+
+        rng = np.random.default_rng(seed)
+        scale = np.sqrt(2.0 / d_model)
+        self.W_q = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_k = Parameter(rng.standard_normal((d_model, self.head_dim)) * scale)
+        self.W_v = Parameter(rng.standard_normal((d_model, self.head_dim)) * scale)
+        self.W_o = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.b_q = Parameter(np.zeros(d_model))
+        self.b_k = Parameter(np.zeros(self.head_dim))
+        self.b_v = Parameter(np.zeros(self.head_dim))
+        self.b_o = Parameter(np.zeros(d_model))
+        self._softmax = Softmax()
+
+    def _split_heads(self, x):
+        B, T, _ = x.shape
+        return x.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def _merge_heads(self, x):
+        B, _, T, _ = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, T, self.d_model)
+
+    def _expand_kv(self, x):
+        # (B, 1, T, Dh) -> (B, H, T, Dh): repeat the single shared
+        # key/value head for every query head.
+        return np.repeat(x, self.num_heads, axis=1)
+
+    def _reduce_kv(self, x):
+        # Backward of _expand_kv: sum the gradient of every expanded
+        # copy back into the single shared head it came from.
+        return x.sum(axis=1, keepdims=True)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        self._x = x
+        q = x @ self.W_q.data + self.b_q.data
+        k = x @ self.W_k.data + self.b_k.data
+        v = x @ self.W_v.data + self.b_v.data
+        self._q = self._split_heads(q)
+        self._k = self._expand_kv(k.reshape(B, T, 1, self.head_dim).transpose(0, 2, 1, 3))
+        self._v = self._expand_kv(v.reshape(B, T, 1, self.head_dim).transpose(0, 2, 1, 3))
+
+        scores = self._q @ self._k.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)
+        if self.causal:
+            mask = np.triu(np.ones((T, T), dtype=bool), k=1)
+            scores = np.where(mask, -1e9, scores)
+        self._attn = self._softmax.forward(scores)
+        context = self._attn @ self._v            # (B, H, T, Dh)
+        merged = self._merge_heads(context)        # (B, T, D)
+        self._merged = merged
+        return merged @ self.W_o.data + self.b_o.data
+
+    def backward(self, grad_output):
+        B, T, D = grad_output.shape
+        # Output projection
+        self.W_o.grad += self._merged.reshape(-1, D).T @ grad_output.reshape(-1, D)
+        self.b_o.grad += grad_output.sum(axis=(0, 1))
+        d_merged = grad_output @ self.W_o.data.T
+        d_context = d_merged.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        # context = attn @ v_expanded
+        d_attn = d_context @ self._v.transpose(0, 1, 3, 2)
+        d_v_expanded = self._attn.transpose(0, 1, 3, 2) @ d_context
+
+        # Softmax backward (masked positions have attn ~ 0, so their
+        # score gradients come out ~ 0 as well)
+        d_scores = self._softmax.backward(d_attn) / np.sqrt(self.head_dim)
+
+        # scores = q @ k_expanded^T / sqrt(Dh)
+        d_q = d_scores @ self._k
+        d_k_expanded = d_scores.transpose(0, 1, 3, 2) @ self._q
+
+        # Sum each expanded gradient over all query heads: the one
+        # shared head's gradient is the sum of every head's gradient.
+        dq = self._merge_heads(d_q)
+        dk = self._reduce_kv(d_k_expanded).reshape(B, T, self.head_dim)
+        dv = self._reduce_kv(d_v_expanded).reshape(B, T, self.head_dim)
+
+        x2 = self._x.reshape(-1, D)
+        self.W_q.grad += x2.T @ dq.reshape(-1, D)
+        self.b_q.grad += dq.sum(axis=(0, 1))
+        self.W_k.grad += x2.T @ dk.reshape(-1, self.head_dim)
+        self.b_k.grad += dk.sum(axis=(0, 1))
+        self.W_v.grad += x2.T @ dv.reshape(-1, self.head_dim)
+        self.b_v.grad += dv.sum(axis=(0, 1))
+
+        return dq @ self.W_q.data.T + dk @ self.W_k.data.T + dv @ self.W_v.data.T
+
+    def parameters(self):
+        return [self.W_q, self.W_k, self.W_v, self.W_o,
+                self.b_q, self.b_k, self.b_v, self.b_o]
+
+
 class CrossAttention(Layer):
     """
     Multi-head cross attention: queries from one sequence, keys and
