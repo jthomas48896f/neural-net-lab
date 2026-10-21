@@ -19,7 +19,7 @@
 
 # Machine
 
-Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 34 tests, all green.
+Machine teaches how a neural network works by building one from scratch in pure Python and NumPy. Its transformer passes gradient checks 7 of 7 against finite differences, and the full suite stands at 37 tests, all green.
 
 Layer 5 of Topsoil Commons: autonomy.
 
@@ -50,7 +50,9 @@ where the script measures the library against it.
   attention, grouped-query attention (GroupedQueryAttention,
   verified by the same gradient checks), multi-query attention
   (MultiQueryAttention, one key/value head shared by every query
-  head, verified by the same gradient checks), cross attention
+  head, verified by the same gradient checks), sliding-window attention
+  (SlidingWindowAttention, causal attention limited to the window_size
+  most recent positions, verified by the same gradient checks), cross attention
   (CrossAttention, queries from one sequence and keys/values from
   another, with a two-input forward and backward, verified by the
   same gradient checks), feed-forward
@@ -76,6 +78,7 @@ artifact, it is not claimed here.
 rotary positional embedding, sinusoidal positional embedding, causal and non-causal attention,
 grouped-query attention (grouped and single key/value head),
 multi-query attention (one key/value head shared by all query heads),
+sliding-window attention (window smaller than the sequence length, positions beyond the window receive zero attention weight),
 cross attention (query and key/value sequences of different lengths),
 feed-forward, a full block, and the
 complete language model) matches central finite differences to a

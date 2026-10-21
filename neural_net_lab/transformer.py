@@ -570,6 +570,110 @@ class MultiQueryAttention(Layer):
                 self.b_q, self.b_k, self.b_v, self.b_o]
 
 
+class SlidingWindowAttention(Layer):
+    """
+    Sliding-window causal self attention.
+
+    Input shape: (B, T, D). Like MultiHeadSelfAttention with a
+    causal mask, but each position may attend only to the
+    window_size most recent positions including itself: position t
+    attends to positions s with t - window_size < s <= t, so the
+    window holds at most window_size positions and every earlier
+    position receives zero attention weight. With window_size >= T
+    this is ordinary causal attention; with a smaller window the
+    mask actually binds, the attention matrix is banded, and the
+    cost per position is bounded by the window rather than by the
+    full sequence length, which is the point of the design for long
+    sequences.
+
+    The projections are the same four d_model x d_model matrices
+    as multi-head attention. The backward pass is the multi-head
+    derivation unchanged: masked positions have attention weight
+    (numerically) zero, so their score gradients come out zero as
+    well, and no gradient flows through a position outside the
+    window it was masked from.
+    """
+
+    def __init__(self, d_model, num_heads, window_size, seed=None):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        if int(window_size) != window_size or window_size < 1:
+            raise ValueError("window_size must be a positive integer")
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        self.window_size = int(window_size)
+
+        rng = np.random.default_rng(seed)
+        scale = np.sqrt(2.0 / d_model)
+        self.W_q = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_k = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_v = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.W_o = Parameter(rng.standard_normal((d_model, d_model)) * scale)
+        self.b_q = Parameter(np.zeros(d_model))
+        self.b_k = Parameter(np.zeros(d_model))
+        self.b_v = Parameter(np.zeros(d_model))
+        self.b_o = Parameter(np.zeros(d_model))
+        self._softmax = Softmax()
+
+    def _split_heads(self, x):
+        B, T, _ = x.shape
+        return x.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def _merge_heads(self, x):
+        B, _, T, _ = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, T, self.d_model)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        self._x = x
+        q = x @ self.W_q.data + self.b_q.data
+        k = x @ self.W_k.data + self.b_k.data
+        v = x @ self.W_v.data + self.b_v.data
+        self._q = self._split_heads(q)
+        self._k = self._split_heads(k)
+        self._v = self._split_heads(v)
+
+        scores = self._q @ self._k.transpose(0, 1, 3, 2) / np.sqrt(self.head_dim)
+        rows = np.arange(T)[:, None]
+        cols = np.arange(T)[None, :]
+        mask = (cols > rows) | (rows - cols >= self.window_size)
+        scores = np.where(mask, -1e9, scores)
+        self._attn = self._softmax.forward(scores)
+        context = self._attn @ self._v
+        merged = self._merge_heads(context)
+        self._merged = merged
+        return merged @ self.W_o.data + self.b_o.data
+
+    def backward(self, grad_output):
+        B, T, D = grad_output.shape
+        self.W_o.grad += self._merged.reshape(-1, D).T @ grad_output.reshape(-1, D)
+        self.b_o.grad += grad_output.sum(axis=(0, 1))
+        d_merged = grad_output @ self.W_o.data.T
+        d_context = d_merged.reshape(B, T, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+        d_attn = d_context @ self._v.transpose(0, 1, 3, 2)
+        d_v = self._attn.transpose(0, 1, 3, 2) @ d_context
+        d_scores = self._softmax.backward(d_attn) / np.sqrt(self.head_dim)
+        d_q = d_scores @ self._k
+        d_k = d_scores.transpose(0, 1, 3, 2) @ self._q
+        dq = self._merge_heads(d_q)
+        dk = self._merge_heads(d_k)
+        dv = self._merge_heads(d_v)
+        x2 = self._x.reshape(-1, D)
+        self.W_q.grad += x2.T @ dq.reshape(-1, D)
+        self.b_q.grad += dq.sum(axis=(0, 1))
+        self.W_k.grad += x2.T @ dk.reshape(-1, D)
+        self.b_k.grad += dk.sum(axis=(0, 1))
+        self.W_v.grad += x2.T @ dv.reshape(-1, D)
+        self.b_v.grad += dv.sum(axis=(0, 1))
+        return dq @ self.W_q.data.T + dk @ self.W_k.data.T + dv @ self.W_v.data.T
+
+    def parameters(self):
+        return [self.W_q, self.W_k, self.W_v, self.W_o,
+                self.b_q, self.b_k, self.b_v, self.b_o]
+
+
 class CrossAttention(Layer):
     """
     Multi-head cross attention: queries from one sequence, keys and

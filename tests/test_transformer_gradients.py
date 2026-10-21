@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from neural_net_lab.transformer import (
     LayerNorm, RMSNorm, RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding,
-    MultiHeadSelfAttention, GroupedQueryAttention, MultiQueryAttention, CrossAttention, FeedForward,
+    MultiHeadSelfAttention, GroupedQueryAttention, MultiQueryAttention, SlidingWindowAttention, CrossAttention, FeedForward,
     SwiGLUFeedForward, TransformerBlock, Embedding,
     CharTransformerLM,
 )
@@ -232,6 +232,40 @@ class TestMultiQueryAttentionGradients(unittest.TestCase):
         layer = MultiQueryAttention(8, 2, causal=False, seed=28)
         x = rng.standard_normal((2, 3, 8)) * 3.0 + 1.5
         check_layer(self, layer, x, seed=28)
+
+
+# Why: sliding-window attention is causal attention with a banded mask: each position attends only to the window_size most recent positions including itself, so its backward must give no gradient through positions outside the window, a mask shape no full causal attention here exercises; the first configuration uses a window smaller than the sequence length so the mask actually binds.
+class TestSlidingWindowAttentionGradients(unittest.TestCase):
+    def test_window_binds_gradients(self):
+        rng = np.random.default_rng(29)
+        layer = SlidingWindowAttention(8, 2, window_size=2, seed=29)
+        x = rng.standard_normal((2, 5, 8))
+        check_layer(self, layer, x, seed=29)
+
+    def test_gradients_scaled_input(self):
+        rng = np.random.default_rng(30)
+        layer = SlidingWindowAttention(8, 4, window_size=3, seed=30)
+        x = rng.standard_normal((2, 4, 8)) * 3.0 + 1.5
+        check_layer(self, layer, x, seed=30)
+
+    # Why: pins the mask itself, since a window that never masked would still pass the gradient checks above against its own (wrong) forward; positions beyond the window and in the future must receive zero attention weight, and positions inside the window must receive some.
+    def test_beyond_window_zero_attention(self):
+        rng = np.random.default_rng(31)
+        layer = SlidingWindowAttention(8, 2, window_size=2, seed=31)
+        x = rng.standard_normal((1, 5, 8))
+        layer.forward(x)
+        attn = layer._attn  # (B, H, T, T)
+        T = x.shape[1]
+        for t in range(T):
+            for s in range(T):
+                if s > t or t - s >= layer.window_size:
+                    self.assertTrue(
+                        np.all(attn[:, :, t, s] == 0.0),
+                        f"attention from position {t} to {s} is not zero")
+                else:
+                    self.assertTrue(
+                        np.all(attn[:, :, t, s] > 0.0),
+                        f"attention from position {t} to {s} is zero inside the window")
 
 
 # Why: cross attention is the one attention here with a two-input API: queries come from one sequence and keys/values from another, the two sequences may differ in length, and backward must return two input gradients (the query input only through the query projection, the key/value input through the key and value projections summed). No single-input check_layer call can prove that split, so this class checks both inputs and all parameters with its own two-input harness, following the same tolerances.
